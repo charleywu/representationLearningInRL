@@ -1,0 +1,207 @@
+---
+title: 'The Laplacian in RL: Learning Representations with Efficient Approximations'
+output:
+  html_document:
+    df_print: paged
+bibliography: bibliography.bib
+---
+
+This is a summary of the ICLR paper [The Laplacian in RL: Learning Representations with Efficient Approximations](https://openreview.net/forum?id=HJlNpoA5YQ) by Yifan Wu (yw4@andrew.cmu.edu), George Tucker, and Ofir Nachum.
+
+Summary by [Charley Wu](https://charleywu.github.io) with no relation to the author of the actual paper.
+
+
+# Generalization in RL
+
+The RL framework by @sutton2018reinforcement commonly represents the environment in the form of a Markov Decision Process (MDP)
+
+![](images/MDP.png)
+
+An MDP is a type of graph representation, where nodes represent states and edges are transitions between states. Selecting actions allow an agent to transition across the graph structure. While building a representation of the transition structure (i.e., model-based RL) is not always necessary, it can help to generalize limited observations of reward to other states.
+
+![](https://miro.medium.com/max/502/1*mdsa1XzgH4FsWF3gdFXEDA.png)
+
+For example, if we know that watching $R(Netflix)=1$, then we may also want to generalize this observation to states predictive of watching netflix (e.g., waking up in this stupid example). One approach to this comes from the Successor Representation [SR; @dayan1993improving].
+
+## Successor Representation
+@dayan1993improving showed that the value function of a TD-learning agent can be decomposed into a linear combination of state transitions $M(s,s')$ and learned reward representation $R(s')$:
+$$
+\begin{equation}
+V(s) = \sum_{s'}M(s,s')R(s')    
+\end{equation}
+$$
+This matrix of state representations $M(s,s')$ is the SR, where each element $m_{jk}$ encodes the similarity of successor states for states $s_j$ and $s_k$ [@dayan1993improving; @gershman2018successor]. Intuitively, the SR can be understood as a similarity measure based on expectations of future state transitions, rather than the singular features of each state. Thus, rewards generalize based on future transition probability.
+
+![Assume A is a reward state. Because of the obstacle in the environment, the similarity $M(A,C)$ is less than $M(A,B)$, since moving from C-->A requires more steps than B-->A, even though the euclidean distance between A and C is less.  From @Machado2018Eigenoption](images/SR.png)
+
+### Computing the SR
+When the transition structure of the task is known \textit{a priori}, the SR can be computed in closed form:
+$$
+\begin{equation}
+M(s,s') = (I - \gamma T)^{-1}, 
+\end{equation}
+$$
+
+where $I$ is the identity matrix, $\gamma$ is the TD discount factor, and $T$ is the transition matrix where $t_{jk}=P(s'=k|s=j)$. A common approach is to assume a random walk over the state space:
+$$
+\begin{equation}
+   T = D^{-1}A
+\end{equation}
+$$
+where $D$ is the degree matrix and $A$ is the adjacency matrix (more on that later).
+
+But if the transition matrix $T$ is not yet known, the SR can still be learned online through prediction error learning:
+$$
+\begin{equation}
+\hat{M}_{t+1}(s_t,s') = \hat{M}_{t}(s_t,s')  + \alpha \left[\delta(s_t=s') + \gamma \hat{M}_{t+1}(s_t,s') - \hat{M}_{t}(s_t,s')\right]
+\end{equation}
+$$
+
+However, this may still require:
+
+* knowing all states $s \in S$
+* having experienced many transitions between each coneccted $s$ and $s'$ pair
+
+**The main goal of this paper is to provide an efficient approximate solution for computing state similarity**
+
+## The Graph Laplacian
+
+So far we have talked about the SR, but this paper talks about Graph Laplacian. How are these concepts related? 
+
+![From @wu2018laplacian](images/Fig1.png)
+It turns out that the Graph Laplacian direct equivalencies to the SR [see @stachenfeld2014NIPS], where both capture a representation of the transition structure of a graph.
+
+Let's try out some examples
+
+
+```{r message=FALSE}
+#Load packages
+packages <- c('dplyr', "ggplot2", 'GGally', 'network', "RColorBrewer", "igraph", 'matrixcalc', 'Matrix', 'lattice', 'jsonlite', 'viridis')
+invisible(lapply(packages, require, character.only = TRUE)) #load packages
+
+#Generate a graph from a news media dataset, where node size is based on audience (millions), and edges are average mentions (undirected) 
+nodes <- read.csv("data/Dataset1-Media-Example-NODES.csv", header=T, as.is=T)
+links <- read.csv("data/Dataset1-Media-Example-EDGES.csv", header=T, as.is=T)
+g <- graph_from_data_frame(d=links, vertices=nodes, directed=T) 
+g <- simplify(g, remove.multiple = F, remove.loops = T) #remove loops
+g <- as.undirected(g) #convert to undirected graph
+E(g)$weight <- E(g)$weight/max(E(g)$weight) #normalize edge weights
+V(g)$audience.size <- V(g)$audience.size/max(V(g)$audience.size) #also normalize node sizes
+
+ggnet2(g, node.size =V(g)$audience.size , color =rainbow(length(V(g))), label = V(g)$media, edge.size ='weight') + theme(legend.position='none')
+
+```
+
+
+The Graph Laplacian $L$ is actually really easy to calculate if you know the transition structure of the graph. 
+$$
+\begin{equation}
+L = D-A
+\end{equation}
+$$
+where $D$ is the Degree matrix with the (weighted) degree of each node along the diagonal and $A$ is the (weighted) adjacency matrix
+```{r}
+palf <- colorRampPalette(c("white", "black")) #color palette
+
+#Degree matrix
+D <- diag(strength(g)) 
+rownames(D) <- V(g)$media
+colnames(D) <- V(g)$media
+heatmap(D[,17:1], Rowv =NA, Colv = NA, col = palf(100), scale="none", margins=c(10,10) )
+
+#Adjacency matrix (weighted if graph is also weighted)
+if(is_weighted(g)){
+  A <- as_adjacency_matrix(g,  attr="weight", sparse=F)  
+}else{
+  A <- as_adjacency_matrix(g, sparse=F) 
+}
+
+rownames(A) <- V(g)$media
+colnames(A) <- V(g)$media
+heatmap(A[,17:1], Rowv =NA, Colv = NA, col = palf(100), scale="none", margins=c(10,10) )
+
+
+#Graph Laplacian
+
+L = D- A
+heatmap(L[,17:1], Rowv =NA, Colv = NA, col = palf(100), scale="none", margins=c(10,10) )
+```
+
+### Some interesting properties:
+* $L$ is symmetric, and has $n$ real eigenvalues (where $n$ is the number of nodes) and its eigenvectors are orthogonal
+* L is positive semi-definite and thus all eigenvalues are non-negative
+
+
+### Quick caveat: There are a number of different Laplacians that are easy to confuse.
+
+**Normalized Laplacian**
+$$\tilde{L} = D^{-1}A$$
+* Has "normalized" eigenvalues that share the same eigenvalues as the SR @stachenfeld2014NIPS
+
+```{r}
+#Normalized Laplacian
+I <- diag(rep(1,length(V(g)))) #identity matrix
+L_normed <- I - sqrt(solve(D))%*%A%*%sqrt(solve(D))
+heatmap(L_normed[,17:1], Rowv =NA, Colv = NA, col = palf(100), scale="none", margins=c(10,10) )
+```
+
+**Row-normalized Laplacian**
+$$L_{RW} = I -D^{-1}A$$
+* Rows sum to 1, indicating the transition probabilities of a random walk along the graph
+
+```{r}
+#Row-normalized Laplacian
+L_rownorm <- I - solve(D)%*%A
+heatmap(L_rownorm[,17:1], Rowv =NA, Colv = NA, col = palf(100), scale="none", margins=c(10,10) )
+
+```
+
+## Relating the Graph Laplacian to the SR
+
+If $M(s,s')=(1-\gamma T)^{-1}$ and given a normalized graph Laplacian $\tilde{L}= D^{-1}A$, the i-th eigenvalue $\lambda_i$ of the SR and the j-th eigenvalue $\lambda_j$ of the normalized Laplacian can be equated as
+$$
+\begin{align}
+    \lambda_j=\left(1-(1-\lambda_i^{-1})\gamma^{-1}\right),
+\end{align}
+
+$$
+and the i-th eigenvector $u_i$ of the SR and the j-th eigenvector $u_j$ of the normalized Laplacian are related by
+$$
+\begin{align}
+u_j=(\gamma^{-1}D^{1/2})u_i
+\end{align}
+$$
+[see @Machado2018Eigenoption for more details]
+
+## Eigenvectors of the Graph Laplacian
+
+What we're primarily interested in are the Eigenvectors of the Graph Laplacian, since these provide us with a compressed representation of the state dynamics. For example, the $d$ smallest eigenvectors of the Laplacian provide an embedding for each state $s\in S$ in $\mathbb{R}^d$, where distances in this reduced representation capture state similarity. 
+
+```{r}
+#Calculating the eigenVectors
+ev <- eigen(L)
+eigenValues <- ev$values
+plot(eigenValues) #eigenValues
+eigenVectors <- ev$vectors
+heatmap(eigenVectors, Rowv = NA, Colv = NA, col = palf(100), scale="none", margins=c(10,10)) #Eigen vectors
+
+#embed the map in 2D using the top two eigen vectors
+embedding <- embed_laplacian_matrix(g, 2) 
+V(g)$x <- embedding$X[,1] #Set X coordinates
+V(g)$y <- embedding$X[,2] #Set Y coordinates
+ggnet2(g,mode = c('x','y'),node.size =V(g)$audience.size , color =rainbow(length(V(g))), label = V(g)$media, edge.size ='weight') + theme(legend.position='none')
+```
+
+However, performing the eigenvector decopompoisition can be computationally expensive for large graphs. Additionally, enumerating the entire statespace may be intractable
+
+## Approximating the Eigenvectors
+
+Instead of assuming we have full knowledge of the connectivity structure of the graph, let's take a function learning approach and try to learn an approximateset of $d$ eigenfunctions $\{f_1,...,f_d\}$. These eigenfunctions will allow us to map any state $s$ into $\mathbb{R}^d$ defined by $\phi(s) = [f_1(s),...,f_d(s)]$, which forms an low-dimensional embedding of the state-space that represents successor similarity in terms of distance.
+
+In learning these functions, we should require that:
+
+* The functions should attempt to be orthonormal, although enforcing this condition exactly may be intractable in innumerable state spaces
+* states with similar 
+
+
+# References
