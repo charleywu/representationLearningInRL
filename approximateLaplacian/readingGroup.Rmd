@@ -204,7 +204,7 @@ V(g)$y <- eigenVectors[,16] #Set Y coordinates
 ggnet2(g,mode = c('x','y'),node.size =V(g)$audience.size , color =pal, label = V(g)$media, edge.size ='weight') + theme(legend.position='none')
 ```
 
-However, performing the eigenvector decopompoisition can be computationally expensive for large graphs. Additionally, enumerating the entire statespace may be intractable. Can we approximate the eigenvectors of the Laplacian without directly having access to the Laplacian?
+However, performing the eigenvector decompoisition can be computationally expensive for large graphs. Additionally, enumerating the entire statespace may be intractable. Can we approximate the eigenvectors of the Laplacian without directly having access to the Laplacian?
 
 ## Approximating the Eigenvectors
 
